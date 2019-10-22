@@ -1,0 +1,4 @@
+instapy-cli
+Pillow
+requests
+mercantile
