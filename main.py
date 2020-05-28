@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 
-import os,sys
+import os,sys,math
 from random import randint
 import requests
 import ujson as json
@@ -9,6 +9,8 @@ from io import BytesIO
 import configparser
 import mercantile
 import logging
+
+os.chdir( os.path.dirname( os.path.abspath(__file__) ) )
 
 if len(sys.argv) == 2 and str(sys.argv[1]).upper() == 'DEBUG':
     logging.basicConfig(level=logging.DEBUG)
@@ -24,11 +26,14 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.common.action_chains import ActionChains
 from selenium.webdriver.common.keys import Keys
+from retrying import retry
 
 def spreadRange(value,spread=5):
-    return range(value-int(spread/2), value+int(spread/2)+1)
+    """Expand tile number outward to aid in creating a larger square mosaic """
+    return range(value-int(spread/2), value+int(spread/2) + math.ceil(spread/5) + 1 )
 
 def applescriptType(path):
+    """Use AppleScript to interact with the Chrome session and provide file name to upload."""
     ascript = """
 activate application "Chrome"
 
@@ -44,32 +49,36 @@ tell application "System Events" to key code 76
     osa = subprocess.Popen(['osascript', '-'], stdin=subprocess.PIPE, stdout=subprocess.PIPE)
     osa.communicate(ascript)
 
-def savePhoto(filename="photo.jpg"):
+@retry(stop_max_attempt_number=7)
+def savePhoto(filename="photo.jpg", z=18, location=None):
     tmspath = "https://maps.nj.gov/arcgis/rest/services/Basemap/Orthos_Natural_2015_NJ_WM/MapServer/WMTS/tile/1.0.0/Basemap_Orthos_Natural_2015_NJ_WM/default/default028mm/{z}/{y}/{x}"
 
-    zoom = 18
-    tmsbounds = (76050,97939,77260,100252)
+    zoom = z
+    sp = 5 if zoom == 18 else 9
 
-    newx = randint(tmsbounds[0],tmsbounds[2])
-    newy = randint(tmsbounds[1],tmsbounds[3])
-
-    latlng = mercantile.ul(newx,newy,zoom)
+    if location:
+        latlng = location
+        tile = mercantile.tile(latlng.lng, latlng.lat, zoom)
+        newx = tile.x
+        newy = tile.y
+    else:
+        tmsbounds = (76050,97939,77260,100252)
+        newx = randint(tmsbounds[0],tmsbounds[2])
+        newy = randint(tmsbounds[1],tmsbounds[3])
+        latlng = mercantile.ul(newx,newy,zoom)
     
-    description = reverseGeocode(latlng.lng, latlng.lat)
-    logging.debug(description)
-
-    post = Image.new("RGB", (256*5,256*5))
+    post = Image.new("RGB", (256*sp,256*sp))
     postiter = [0,0]
 
-    for x in spreadRange(newx):
+    for x in spreadRange(newx, spread=sp):
         postiter[1]=0
-        for y in spreadRange(newy):
+        for y in spreadRange(newy, spread=sp):
             r = requests.get(tmspath.format(z=zoom,y=y,x=x))
             logging.debug(r.status_code, tmspath.format(z=zoom,y=y,x=x))
             onetile = Image.open(BytesIO(r.content)) 
             if not onetile.getbbox():
                 logging.error("Empty tile encountered. Quitting.")
-                return None
+                raise ValueError("Empty Tile")
             post.paste(onetile,
                 (256*postiter[0], 256*postiter[1],
                 (256*postiter[0])+256, (256*postiter[1])+256 ))
@@ -77,7 +86,7 @@ def savePhoto(filename="photo.jpg"):
             postiter[1] += 1
         postiter[0] += 1
     post.save(filename)
-    return description
+    return latlng
 
 def reverseGeocode(x, y):
     url = "https://geo.nj.gov/arcgis/rest/services/Tasks/Addr_NJ_cascade/GeocodeServer/reverseGeocode?location=%7B+%22x%22%3A+{x}%2C+%22y%22%3A+{y}%2C+%22spatialReference%22%3A+%7B+%22wkid%22%3A+4326+%7D+%7D&distance=100&langCode=&locationType=&featureTypes=&outSR=4326&returnIntersection=false&f=pjson".format(x=x,y=y)
@@ -146,10 +155,7 @@ class FakeBrowser(object):
         new_post_btn = self.driver.find_element_by_xpath("//div[@role='menuitem']").click()
         sleep(1.5)
         
-#        uploadfile = self.driver.find_element_by_xpath("//input[@type='file'][@accept='image/jpeg']")
-#        uploadfile.sendkeys( os.path.join(os.getcwd(), 'photo.jpg'))
         applescriptType( os.path.join(os.getcwd(), 'photo.jpg'))
-#        uploadfile.submit()
         sleep(2)
 
         next_btn = self.driver.find_element_by_xpath("//button[contains(text(),'Next')]").click()
@@ -159,15 +165,18 @@ class FakeBrowser(object):
         caption_field.send_keys(description)
 
         share_btn = self.driver.find_element_by_xpath("//button[contains(text(),'Share')]").click()
-        sleep(25)
 
     def __del__(self):
-        logging.info("Waiting 20 seconds before closing session.")
-        sleep(20)
         self.driver.quit()
 
 if __name__ == '__main__':
-    description = savePhoto()
+    latlng = savePhoto()
+    logging.info(latlng)
+    description = reverseGeocode(latlng.lng, latlng.lat)
+    logging.info(description)
+
+    savePhoto(filename="photo_lg.jpg", z=19, location=latlng)
+
     if description:
         logging.info( os.path.join(os.getcwd(), 'photo.jpg') )
         logging.info(description)
@@ -178,7 +187,6 @@ if __name__ == '__main__':
             fb.close_notification()
             fb.close_add_to_home()
             fb.postPhoto(description)
-            sleep(25)
         except Exception as e:
             logging.error(e)
             sys.exit(2)
