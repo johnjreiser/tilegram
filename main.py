@@ -207,6 +207,7 @@ class FakeBrowser(object):
         share_btn = self.driver.find_element_by_xpath(
             "//button[contains(text(),'Share')]"
         ).click()
+        sleep(5)  # wait for upload to complete
 
     def __del__(self):
         self.driver.quit()
