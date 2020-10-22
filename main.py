@@ -41,7 +41,7 @@ def applescriptType(path):
     ascript = """
 activate application "Chrome"
 
-tell application "System Events" to keystroke "/{0}"
+tell application "System Events" to keystroke "{0}"
 
 delay 1
 tell application "System Events" to key code 76
@@ -192,7 +192,7 @@ class FakeBrowser(object):
         sleep(1.5)
 
         applescriptType(os.path.join(os.getcwd(), "photo.jpg"))
-        sleep(2)
+        sleep(3)
 
         next_btn = self.driver.find_element_by_xpath(
             "//button[contains(text(),'Next')]"
